@@ -3,8 +3,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
-build/
 dist/
+# PyInstaller workpath (the build/ dir also holds our packaging scripts, kept).
+/build/work/
 .venv/
 venv/
 .env

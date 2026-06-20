@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' https: data:; style-src 'self' 'unsafe-inline';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spotiflac</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="titlebar"><span class="titlebar-title">Spotiflac</span></div>
+
+    <div class="shell">
+      <nav class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">S</div>
+          <div class="brand-text">
+            <strong>Spotiflac</strong>
+            <small>stable spotdl</small>
+          </div>
+        </div>
+        <button class="nav-item active" data-view="download">
+          <span class="nav-dot"></span> Download
+        </button>
+        <button class="nav-item" data-view="profiles">
+          <span class="nav-dot"></span> Profiles
+        </button>
+        <button class="nav-item" data-view="activity">
+          <span class="nav-dot"></span> Activity
+          <span class="badge" id="activity-badge" hidden>0</span>
+        </button>
+        <div class="sidebar-foot">
+          <span class="status-dot" id="conn-dot"></span>
+          <span id="conn-text">connecting…</span>
+        </div>
+      </nav>
+
+      <main class="content">
+        <!-- DOWNLOAD ------------------------------------------------------ -->
+        <section class="view active" id="view-download">
+          <header class="view-head">
+            <h1>Download</h1>
+            <p>Paste Spotify tracks, albums, playlists, or artist links — one per line — or type a search.</p>
+          </header>
+
+          <div class="card">
+            <label class="field">
+              <span>Songs, albums, playlists or search queries</span>
+              <textarea
+                id="query"
+                rows="4"
+                placeholder="https://open.spotify.com/playlist/...&#10;https://open.spotify.com/track/...&#10;daft punk - get lucky"
+              ></textarea>
+            </label>
+
+            <div class="field">
+              <span>Download folder</span>
+              <div class="folder-row">
+                <input id="folder" type="text" placeholder="Choose a destination folder…" readonly />
+                <button class="btn ghost" id="choose-folder">Browse…</button>
+              </div>
+            </div>
+
+            <div class="grid">
+              <label class="field">
+                <span>Format</span>
+                <select id="format">
+                  <option value="mp3">MP3</option>
+                  <option value="m4a">M4A</option>
+                  <option value="opus">Opus</option>
+                  <option value="flac">FLAC</option>
+                  <option value="ogg">OGG</option>
+                  <option value="wav">WAV</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Bitrate</span>
+                <select id="bitrate">
+                  <option value="auto">Auto</option>
+                  <option value="320k">320k</option>
+                  <option value="256k">256k</option>
+                  <option value="128k">128k</option>
+                  <option value="disable">Original</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Concurrency</span>
+                <input id="threads" type="number" min="1" max="16" value="4" />
+              </label>
+              <label class="field">
+                <span>If file exists</span>
+                <select id="overwrite">
+                  <option value="skip">Skip</option>
+                  <option value="metadata">Update metadata</option>
+                  <option value="force">Re-download</option>
+                </select>
+              </label>
+            </div>
+
+            <details class="advanced">
+              <summary>Stability &amp; advanced</summary>
+              <div class="grid">
+                <label class="field">
+                  <span>Batch size</span>
+                  <input id="batch" type="number" min="5" max="500" value="50" />
+                </label>
+                <label class="field">
+                  <span>Max attempts / track</span>
+                  <input id="attempts" type="number" min="1" max="10" value="4" />
+                </label>
+              </div>
+              <p class="hint">
+                Big runs are processed in batches and checkpointed after each one, so an
+                interrupted run resumes where it left off. Failed tracks are retried with
+                exponential backoff and a per-track attempt budget.
+              </p>
+            </details>
+
+            <div class="actions">
+              <button class="btn primary" id="start">Start download</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- PROFILES ------------------------------------------------------ -->
+        <section class="view" id="view-profiles">
+          <header class="view-head">
+            <h1>Profiles</h1>
+            <p>Look up a Spotify user by username or profile link and browse their public playlists.</p>
+          </header>
+
+          <div class="card">
+            <div class="folder-row">
+              <input
+                id="profile-query"
+                type="text"
+                placeholder="username, or https://open.spotify.com/user/…"
+              />
+              <button class="btn primary" id="profile-search">Find</button>
+            </div>
+            <p class="hint" id="profile-hint">
+              Spotify has no free-text user search, so enter a username or profile link.
+            </p>
+          </div>
+
+          <div id="profile-result"></div>
+        </section>
+
+        <!-- ACTIVITY ------------------------------------------------------ -->
+        <section class="view" id="view-activity">
+          <header class="view-head">
+            <h1>Activity</h1>
+            <p>Live progress, with pause, resume and cancel for every run.</p>
+          </header>
+          <div id="jobs"></div>
+          <div class="empty" id="jobs-empty">No downloads yet.</div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="app.js"></script>
+  </body>
+</html>

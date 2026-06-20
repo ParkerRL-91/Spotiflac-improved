@@ -1,181 +1,167 @@
+# Spotiflac
 
-<!--- mdformat-toc start --slug=github --->
+A friendly, **stable** desktop app for downloading your Spotify music — a fork
+of [spotdl/spotify-downloader](https://github.com/spotdl/spotify-downloader)
+with a native macOS UI and a hardening layer built for **long, unattended
+runs** (think multi-thousand-track libraries, overnight).
 
-<!---
-!!! IF EDITING THE README, MOST CHANGES SHOULD ALSO BE PROPAGATED TO index.md in `/docs/`.
-!!! ADJUST FORMATTING THERE AS NEEDED, AND REMOVE README-ONLY / ReadTheDocs REFERENCES.
---->
+> Spotiflac uses the same approach as spotdl: it reads track metadata from
+> Spotify and downloads matching audio from YouTube Music / other providers.
+> Only download content you have the right to.
 
-<div align="center">
+---
 
-# spotDL v4
+## What this fork adds
 
-**spotDL** finds songs from Spotify playlists on YouTube and downloads them - along with album art, lyrics and metadata.
+| | spotdl | Spotiflac |
+|---|---|---|
+| Interface | CLI (+ datastar web) | **Electron desktop app** (macOS) |
+| Long-run resume | download archive | **Per-job checkpoints** — resume after a crash/quit |
+| Failures | logged | **Retry w/ backoff + per-track attempt budget + failure report** |
+| Rate limits | yt-dlp retries | **Adaptive, process-wide throttle** that backs off on 429s |
+| Memory | unbounded over time | **Bounded batches + memory watchdog** |
+| Profiles | n/a | **Look up a user and browse their public playlists** |
 
-[![MIT License](https://img.shields.io/github/license/spotdl/spotify-downloader?color=44CC11&style=flat-square)](https://github.com/spotDL/spotify-downloader/blob/master/LICENSE)
-[![PyPI version](https://img.shields.io/pypi/pyversions/spotDL?color=%2344CC11&style=flat-square)](https://pypi.org/project/spotdl/)
-[![PyPi downloads](https://img.shields.io/pypi/dw/spotDL?label=downloads@pypi&color=344CC11&style=flat-square)](https://pypi.org/project/spotdl/)
-![Contributors](https://img.shields.io/github/contributors/spotDL/spotify-downloader?style=flat-square)
-[![Discord](https://img.shields.io/discord/771628785447337985?label=discord&logo=discord&style=flat-square)](https://discord.gg/xCa23pwJWY)
+The upstream `spotdl/` package is vendored **unmodified** so the fork stays
+easy to rebase on new releases. Everything new lives in two packages alongside
+it: `spotiflac/` (the stability engine) and `server/` (the local API the UI
+talks to), plus `app/` (the Electron front-end).
 
-> spotDL: The fastest, easiest and most accurate command-line music downloader.
-</div>
+---
 
-______________________________________________________________________
-**[Read the documentation on ReadTheDocs!](https://spotdl.readthedocs.io)**
-______________________________________________________________________
+## Architecture
 
-## Installation
+```
+┌──────────────────────────┐     HTTP + WebSocket      ┌────────────────────────┐
+│  Electron app (app/)      │ ───────────────────────▶ │  Python sidecar         │
+│  • renderer UI            │  127.0.0.1 (local only)   │  (server/ → FastAPI)    │
+│  • spawns + supervises    │ ◀─── live progress ────── │  • JobManager           │
+│    the sidecar            │                           │  • WebSocket broadcast  │
+└──────────────────────────┘                           └───────────┬────────────┘
+                                                                    │
+                                                        ┌───────────▼────────────┐
+                                                        │  spotiflac/ engine      │
+                                                        │  checkpoint · retry ·   │
+                                                        │  resources · jobs       │
+                                                        └───────────┬────────────┘
+                                                                    │
+                                                        ┌───────────▼────────────┐
+                                                        │  spotdl/ (vendored)     │
+                                                        └─────────────────────────┘
+```
 
-Refer to our [Installation Guide](docs/installation.md) for more details.
+The sidecar binds `127.0.0.1` only and the Electron main process supervises its
+lifecycle (spawns it, waits for `SPOTIFLAC_READY <port>`, kills it on quit).
 
-### Python (Recommended Method)
+---
 
-- _spotDL_ can be installed by running `pip install spotdl`.
-- To update spotDL run `pip install --upgrade spotdl`
+## The stability layer (`spotiflac/`)
 
-  > On some systems you might have to change `pip` to `pip3`.
+Long runs fail in boring, predictable ways: the network blips, a provider
+rate-limits you, the machine sleeps, the app is quit halfway. Spotiflac
+addresses each:
+
+- **`checkpoint.py`** — every track's outcome is persisted to an **atomically
+  written** JSON file keyed deterministically by `(query, output)`. Re-running
+  the same job skips what already succeeded. A corrupt checkpoint is quarantined
+  and the run continues rather than crashing.
+- **`retry.py`** — `retry_call()` wraps flaky calls with exponential backoff +
+  jitter, honouring `Retry-After`. `AdaptiveRateLimiter` is a process-wide gate
+  that slows everything when 429s appear and decays back to full speed when they
+  stop — additive-increase / multiplicative-decrease.
+- **`resources.py`** — a conservative default thread count, plus a background
+  `MemoryWatchdog` that logs RSS, forces GC past a soft limit, and signals the
+  orchestrator to shrink batch size + flush state past a hard limit.
+- **`jobs.py`** — the orchestrator. Searches (with retry), filters out
+  already-done tracks, downloads in **bounded batches**, checkpoints after each
+  batch, retries failures up to a budget, and emits structured progress events.
+  Pausable and cancellable at batch boundaries. It also clears spotdl's
+  class-level progress map between batches to stop it growing over a long run.
+- **`logging_setup.py`** — a rotating per-job log and a machine- + human-readable
+  **failed-tracks report** written when the job ends.
+
+These pieces are covered by `tests_spotiflac/` and need no network or ffmpeg.
+
+---
+
+## Develop
+
+Requires Python 3.10–3.14, Node 18+, and ffmpeg available at runtime.
+
+```bash
+# Python side
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+
+# Run the sidecar on its own (great for API testing)
+python -m server          # prints SPOTIFLAC_READY <port>, serves on 127.0.0.1
+
+# Run the desktop app in dev (spawns the sidecar via your python)
+cd app && npm install && npm run dev
+```
+
+Run the stability tests:
+
+```bash
+pip install pytest && python -m pytest tests_spotiflac/ -q
+```
+
+---
+
+## Build the macOS app
+
+On a Mac with Xcode command-line tools:
+
+```bash
+./build/build_mac.sh
+```
+
+This freezes the Python sidecar with PyInstaller
+(`build/spotiflac-sidecar.spec`) and bundles it inside an Electron app + DMG via
+`electron-builder`. The hardened runtime + entitlements are configured for the
+PyInstaller bootloader and network access. Signing and notarization are
+optional and documented in [`build/NOTARIZE.md`](build/NOTARIZE.md).
+
+> This repository is developed in a Linux container, so the `.app`/`.dmg` must
+> be produced on macOS — the scripts and entitlements are ready to run there.
+
+---
+
+## API (sidecar)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/health` | liveness + version |
+| `POST` | `/api/credentials` | set Spotify credentials (optional; sensible defaults) |
+| `POST` | `/api/jobs` | start a download job |
+| `GET` | `/api/jobs` / `/api/jobs/{uid}` | list / inspect jobs |
+| `POST` | `/api/jobs/{uid}/{pause,resume,cancel}` | control a job |
+| `GET` | `/api/profile?user=…` | resolve a profile + list its public playlists |
+| `WS` | `/ws` | live progress events |
+
+---
+
+## Profiles
+
+Enter a Spotify **username** or **profile link** and Spotiflac lists that user's
+public playlists, each downloadable with one click. Note: the Spotify Web API
+has **no free-text user search**, so you look people up by handle/link rather
+than by display name.
+
+---
+
+## Credits & license
+
+Built on the excellent [spotDL](https://github.com/spotdl/spotify-downloader).
+MIT licensed, same as upstream — see [`LICENSE`](LICENSE).
+
+---
 
 <details>
-    <summary style="font-size:1.25em"><strong>Other options</strong></summary>
+<summary>Upstream spotdl documentation</summary>
 
-- Prebuilt executable
-  - You can download the latest version from the
-    [Releases Tab](https://github.com/spotDL/spotify-downloader/releases)
-- On Termux
-  - `curl -L https://raw.githubusercontent.com/spotDL/spotify-downloader/master/scripts/termux.sh | sh`
-- Arch
-  - There is an [Arch User Repository (AUR) package](https://aur.archlinux.org/packages/spotdl/) for
-    spotDL.
-- Docker
-  - Build image:
-
-    ```bash
-    docker build -t spotdl .
-    ```
-
-  - Launch container with spotDL parameters (see section below). You need to create mapped
-    volume to access song files
-
-    ```bash
-    docker run --rm -v $(pwd):/music spotdl download [trackUrl]
-    ```
-
-  - For Docker Compose and permission-managed Docker downloads, see
-    [the Docker section in `/docs/index.md`](docs/index.md#docker).
-
-  - Build from source
-
-    ```bash
-    git clone https://github.com/spotDL/spotify-downloader && cd spotify-downloader
-    pip install uv
-    uv sync
-    uv run scripts/build.py
-    ```
-
-    An executable is created in `spotify-downloader/dist/`.
+The original spotdl CLI remains fully available (`spotdl ...`). See the
+[spotDL docs](https://spotdl.rtfd.io) for CLI usage, configuration, and audio
+provider details.
 
 </details>
-
-### Installing FFmpeg
-
-FFmpeg is required for spotDL. If using FFmpeg only for spotDL, you can simply install FFmpeg to your spotDL installation directory:
-`spotdl --download-ffmpeg`
-
-We recommend the above option, but if you want to install FFmpeg system-wide,
-follow these instructions
-
-- [Windows Tutorial](https://windowsloop.com/install-ffmpeg-windows-10/)
-- OSX - `brew install ffmpeg`
-- Linux - `sudo apt install ffmpeg` or use your distro's package manager
-
-### Installing Deno
-
-We strongly recommend installing Deno. spotDL uses yt-dlp for YouTube downloads, and some
-videos require Deno to download successfully. Without Deno, spotDL may fail to download some
-songs, including videos marked as "made for kids".
-
-If using Deno only for spotDL, install Deno to your spotDL directory:
-`spotdl --download-deno`
-
-If you want to install Deno system-wide instead, follow the
-[official Deno installation guide](https://docs.deno.com/runtime/getting_started/installation/).
-
-## Usage
-
-Using SpotDL without options:
-
-```sh
-spotdl [urls]
-```
-
-You can run _spotDL_ as a package if running it as a script doesn't work:
-
-```sh
-python -m spotdl [urls]
-```
-
-General usage:
-
-```sh
-spotdl [operation] [options] QUERY
-```
-
-There are different **operations** spotDL can perform. The _default_ is `download`, which simply downloads the songs from YouTube and embeds metadata.
-
-The **query** for spotDL is usually a list of Spotify URLs, but for some operations like **sync**, only a single link or file is required.
-For a list of all **options** use ```spotdl -h```
-
-<details>
-<summary style="font-size:1em"><strong>Supported operations</strong></summary>
-
-- `save`: Saves only the metadata from Spotify without downloading anything.
-    - Usage:
-        `spotdl save [query] --save-file {filename}.spotdl`
-
-- `web`: Starts a web interface instead of using the command line. However, it has limited features and only supports downloading individual songs.
-
-- `url`: Get user-friendly URL for each song from the query.
-    - Usage:
-        `spotdl url [query]`
-
-- `sync`: Updates directories. Compares the directory with the current state of the playlist. Newly added songs will be downloaded and removed songs will be deleted. No other songs will be downloaded and no other files will be deleted.
-
-    - Usage:
-        `spotdl sync [query] --save-file {filename}.spotdl`
-
-        This creates a new **sync** file. To update the directory in the future, use:
-
-        `spotdl sync {filename}.spotdl`
-
-- `meta`: Updates metadata for the provided song files.
-
-</details>
-
-## Music Sourcing and Audio Quality
-
-spotDL uses YouTube as a source for music downloads. This method is used to avoid any issues related to downloading music from Spotify.
-
-> **Note**
-> Users are responsible for their actions and potential legal consequences. We do not support unauthorized downloading of copyrighted material and take no responsibility for user actions.
-
-### Audio Quality
-
-spotDL downloads music from YouTube and is designed to always download the highest possible bitrate; which is 128 kbps for regular users and 256 kbps for YouTube Music premium users.
-
-Check the [Audio Formats](docs/usage.md#audio-formats-and-quality) page for more info.
-
-## Contributing
-
-Interested in contributing? Check out our [CONTRIBUTING.md](docs/CONTRIBUTING.md) to find
-resources around contributing along with a guide on how to set up a development environment.
-
-### Join our amazing community as a code contributor
-
-<a href="https://github.com/spotDL/spotify-downloader/graphs/contributors">
-  <img class="dark-light" src="https://contrib.rocks/image?repo=spotDL/spotify-downloader&anon=0&columns=25&max=100&r=true" />
-</a>
-
-## License
-
-This project is Licensed under the [MIT](/LICENSE) License.
