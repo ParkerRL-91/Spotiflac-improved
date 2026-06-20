@@ -54,13 +54,21 @@ function startSidecar() {
     }, 30000);
 
     let buffer = "";
+    let resolving = false;
     sidecar.stdout.on("data", (chunk) => {
       buffer += chunk.toString();
       const match = buffer.match(/SPOTIFLAC_READY (\d+)/);
-      if (match) {
-        clearTimeout(timeout);
-        sidecarPort = parseInt(match[1], 10);
-        resolve(sidecarPort);
+      if (match && !resolving) {
+        resolving = true;
+        const port = parseInt(match[1], 10);
+        // The READY line is printed just before uvicorn binds; poll health so
+        // we only report ready once the server actually accepts connections.
+        waitForHealth(port, timeout)
+          .then(() => {
+            sidecarPort = port;
+            resolve(port);
+          })
+          .catch(reject);
       }
       process.stdout.write(`[sidecar] ${chunk}`);
     });
@@ -76,6 +84,25 @@ function startSidecar() {
     });
   });
   return sidecarReady;
+}
+
+// Poll the sidecar's health endpoint until it answers, so the renderer never
+// loads against a socket that isn't accepting connections yet.
+async function waitForHealth(port, clearTimer) {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/health`);
+      if (res.ok) {
+        clearTimeout(clearTimer);
+        return;
+      }
+    } catch (_e) {
+      /* not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error("Sidecar health check timed out");
 }
 
 function stopSidecar() {
