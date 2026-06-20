@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# Node / Electron
+node_modules/
+app/dist/
+app/out/
+*.log
+
+# spotiflac runtime
+*.spotdlTrackingFile
+spotiflac-sidecar/
+.spotiflac/
+
+# OS
+.DS_Store
