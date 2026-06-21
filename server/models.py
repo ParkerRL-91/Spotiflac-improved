@@ -28,6 +28,23 @@ class JobRequest(BaseModel):
     settings: Dict[str, Any] = Field(default_factory=dict)
     batch_size: int = 50
     max_track_attempts: int = 4
+    # "spotdl" (default) or "tidal" (real FLAC from the user's Tidal account).
+    backend: str = "spotdl"
+    tidal_quality: int = 3
+
+
+class LibraryRequest(BaseModel):
+    """One-click 'download my whole Spotify library'."""
+
+    liked: bool = True
+    albums: bool = True
+    playlists: bool = True
+    followed_artists: bool = False
+    backend: str = "tidal"
+    output: Optional[str] = None
+    format: str = "flac"
+    batch_size: int = 50
+    max_track_attempts: int = 4
 
 
 class ProfileResponse(BaseModel):

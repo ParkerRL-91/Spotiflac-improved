@@ -36,6 +36,13 @@ for pkg in (
     "datastar_py",
     "jinja2",
     "bs4",
+    # Lossless backend (Tidal/Qobuz/Deezer). Safe to skip if not installed.
+    "streamrip",
+    "aiohttp",
+    "aiofiles",
+    "click",
+    "tomlkit",
+    "mutagen",
 ):
     try:
         d, b, h = collect_all(pkg)

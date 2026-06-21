@@ -25,6 +25,9 @@
         <button class="nav-item active" data-view="download">
           <span class="nav-dot"></span> Download
         </button>
+        <button class="nav-item" data-view="library">
+          <span class="nav-dot"></span> My Library
+        </button>
         <button class="nav-item" data-view="profiles">
           <span class="nav-dot"></span> Profiles
         </button>
@@ -62,6 +65,33 @@
                 <input id="folder" type="text" placeholder="Choose a destination folder…" readonly />
                 <button class="btn ghost" id="choose-folder">Browse…</button>
               </div>
+            </div>
+
+            <label class="field">
+              <span>Organize into folders</span>
+              <select id="organize">
+                <option value="artist-album-track">Artist › Album › Track</option>
+                <option value="artist-track">Artist › Track</option>
+                <option value="album-track">Album › Track</option>
+                <option value="flat">All in one folder</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Source &amp; quality</span>
+              <select id="backend">
+                <option value="spotdl">Free (Bandcamp / YouTube) — no login</option>
+                <option value="tidal">Tidal — real FLAC (your account)</option>
+              </select>
+            </label>
+
+            <div id="tidal-card" class="tidal-card" hidden>
+              <div class="tidal-row">
+                <span class="status-dot" id="tidal-dot"></span>
+                <span id="tidal-text">Tidal not connected</span>
+                <button class="btn ghost small" id="tidal-connect">Connect Tidal</button>
+              </div>
+              <p class="hint" id="tidal-hint" hidden></p>
             </div>
 
             <div class="grid">
@@ -121,6 +151,60 @@
 
             <div class="actions">
               <button class="btn primary" id="start">Start download</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- LIBRARY ------------------------------------------------------- -->
+        <section class="view" id="view-library">
+          <header class="view-head">
+            <h1>My Library</h1>
+            <p>Download everything in your Spotify account — Liked Songs, saved albums and playlists — in one click.</p>
+          </header>
+
+          <div class="card">
+            <div class="lib-options">
+              <label class="check"><input type="checkbox" id="lib-liked" checked /> Liked Songs</label>
+              <label class="check"><input type="checkbox" id="lib-albums" checked /> Saved albums</label>
+              <label class="check"><input type="checkbox" id="lib-playlists" checked /> All playlists</label>
+              <label class="check"><input type="checkbox" id="lib-artists" /> Followed artists</label>
+            </div>
+
+            <label class="field">
+              <span>Source &amp; quality</span>
+              <select id="lib-backend">
+                <option value="tidal">Tidal — real FLAC (your account)</option>
+                <option value="spotdl">Free (Bandcamp / YouTube) — no login</option>
+              </select>
+            </label>
+
+            <div class="field">
+              <span>Download folder</span>
+              <div class="folder-row">
+                <input id="lib-folder" type="text" placeholder="Choose a destination folder…" readonly />
+                <button class="btn ghost" id="lib-choose-folder">Browse…</button>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>Organize into folders</span>
+              <select id="lib-organize">
+                <option value="artist-album-track">Artist › Album › Track</option>
+                <option value="artist-track">Artist › Track</option>
+                <option value="album-track">Album › Track</option>
+                <option value="flat">All in one folder</option>
+              </select>
+            </label>
+
+            <p class="hint">
+              Reading your Liked Songs and private playlists requires a one-time Spotify
+              sign-in (a browser window opens the first time). This can be a very large
+              run — it's processed in batches and checkpointed, so you can quit and it
+              resumes where it left off.
+            </p>
+
+            <div class="actions">
+              <button class="btn primary" id="lib-start">Download my entire library</button>
             </div>
           </div>
         </section>

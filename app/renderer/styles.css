@@ -185,6 +185,20 @@ textarea:focus, input:focus, select:focus {
 .playlist .pl-info strong { display: block; }
 .playlist .pl-info small { color: var(--text-dim); }
 
+/* Tidal connect card */
+.tidal-card {
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 16px;
+}
+.tidal-row { display: flex; align-items: center; gap: 10px; }
+.tidal-row #tidal-text { flex: 1; color: var(--text-dim); font-size: 13px; }
+#tidal-hint a { color: var(--accent); }
+
+/* Library checkboxes */
+.lib-options { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px; }
+.check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.check input { width: auto; }
+
 .empty { color: var(--text-dim); text-align: center; padding: 40px; }
 
 .toast {

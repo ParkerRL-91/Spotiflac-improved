@@ -47,6 +47,11 @@ function startSidecar() {
       SPOTIFLAC_HOST: "127.0.0.1",
       PYTHONUNBUFFERED: "1",
     });
+    // Point the Tidal backend at the bundled streamrip CLI in production.
+    if (!isDev) {
+      const ripPath = path.join(process.resourcesPath, "sidecar", "rip");
+      if (fs.existsSync(ripPath)) env.SPOTIFLAC_RIP = ripPath;
+    }
     sidecar = spawn(command, args, { cwd, env });
 
     const timeout = setTimeout(() => {

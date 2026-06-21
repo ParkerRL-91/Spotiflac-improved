@@ -21,13 +21,19 @@ python3 -m venv .venv-build
 # shellcheck disable=SC1091
 source .venv-build/bin/activate
 pip install --upgrade pip wheel
-pip install -e .
+pip install -e ".[lossless]"   # include the Tidal/Qobuz/Deezer (streamrip) backend
 pip install pyinstaller
 
-echo "==> [2/3] Freezing the sidecar"
+echo "==> [2/3] Freezing the sidecar (+ bundled streamrip 'rip' CLI)"
 rm -rf build/work dist/spotiflac-sidecar
 pyinstaller build/spotiflac-sidecar.spec --noconfirm \
   --distpath dist --workpath build/work
+
+# Freeze the streamrip CLI next to the sidecar so the Tidal backend works in
+# the packaged app (the app sets SPOTIFLAC_RIP to this binary).
+pyinstaller build/rip_entry.py --name rip --onefile --noconfirm \
+  --distpath dist/spotiflac-sidecar --workpath build/work \
+  --collect-all streamrip || echo "WARN: rip CLI not bundled (lossless extra missing)"
 
 echo "==> [3/3] Building the Electron app + DMG"
 cd app

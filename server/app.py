@@ -22,15 +22,24 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from server.models import CredentialsRequest, JobRequest, ProfileResponse
+from server.models import (
+    CredentialsRequest,
+    JobRequest,
+    LibraryRequest,
+    ProfileResponse,
+)
 from spotiflac import __version__
 from spotiflac.jobs import JobConfig, JobManager
+from spotiflac.library import library_query, requires_user_auth
+from spotiflac.lossless.providers import _default_streamrip_config
+from spotiflac.lossless.tidal_auth import TidalLinker, tidal_is_linked
 from spotiflac.profiles import get_profile
 
 logger = logging.getLogger("spotiflac.server")
 
 app = FastAPI(title="Spotiflac", version=__version__)
 manager = JobManager()
+tidal_linker = TidalLinker(_default_streamrip_config())
 
 
 class ConnectionManager:
@@ -154,6 +163,8 @@ def _build_settings(req: JobRequest) -> Dict[str, Any]:
         settings["overwrite"] = req.overwrite
     if req.output:
         settings["output"] = req.output
+    if req.backend == "tidal":
+        settings["tidal_quality"] = req.tidal_quality
     return settings
 
 
@@ -166,9 +177,79 @@ async def create_job(req: JobRequest) -> Dict[str, Any]:
         settings=settings,
         batch_size=req.batch_size,
         max_track_attempts=req.max_track_attempts,
+        backend=req.backend,
     )
     job = manager.create_job(config, on_event=connections.broadcast_threadsafe)
     return job.status()
+
+
+@app.post("/api/jobs/library")
+async def create_library_job(req: LibraryRequest) -> Dict[str, Any]:
+    """Download the whole Spotify account: Liked Songs, saved albums, playlists."""
+    query = library_query(
+        liked=req.liked,
+        albums=req.albums,
+        playlists=req.playlists,
+        followed_artists=req.followed_artists,
+    )
+    if not query:
+        raise HTTPException(status_code=400, detail="Nothing selected to download")
+
+    # Liked Songs / private playlists need Spotify user authentication.
+    if requires_user_auth(query):
+        creds = _default_credentials()
+        try:
+            manager.ensure_spotify(
+                client_id=creds["client_id"],
+                client_secret=creds["client_secret"],
+                user_auth=True,
+                cache_path=creds["cache_path"],
+                headless=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=409,
+                detail=f"Spotify login required to read your library: {exc}",
+            ) from exc
+
+    settings: Dict[str, Any] = {"format": req.format}
+    if req.backend == "tidal":
+        settings["tidal_quality"] = 3
+    config = JobConfig(
+        query=query,
+        output=req.output or "{artists} - {title}.{output-ext}",
+        settings=settings,
+        batch_size=req.batch_size,
+        max_track_attempts=req.max_track_attempts,
+        backend=req.backend,
+        user_auth=True,
+    )
+    job = manager.create_job(config, on_event=connections.broadcast_threadsafe)
+    return job.status()
+
+
+@app.get("/api/spotify/status")
+async def spotify_status() -> Dict[str, Any]:
+    return {"user_auth": manager.user_auth_ready}
+
+
+@app.get("/api/tidal/status")
+async def tidal_status() -> Dict[str, Any]:
+    status = tidal_linker.status()
+    status["linked"] = tidal_is_linked(_default_streamrip_config())
+    return status
+
+
+@app.post("/api/tidal/login")
+async def tidal_login() -> Dict[str, Any]:
+    """Start Tidal account linking; returns a URL to approve in the browser."""
+    return tidal_linker.start()
+
+
+@app.post("/api/tidal/login/cancel")
+async def tidal_login_cancel() -> Dict[str, Any]:
+    tidal_linker.cancel()
+    return {"status": "cancelled"}
 
 
 @app.get("/api/jobs")

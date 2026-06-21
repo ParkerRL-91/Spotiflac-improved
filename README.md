@@ -21,6 +21,9 @@ runs** (think multi-thousand-track libraries, overnight).
 | Rate limits | yt-dlp retries | **Adaptive, process-wide throttle** that backs off on 429s |
 | Memory | unbounded over time | **Bounded batches + memory watchdog** |
 | Profiles | n/a | **Look up a user and browse their public playlists** |
+| Real FLAC | ✗ (YouTube → transcode) | **Tidal backend: true lossless from your own account** |
+| Whole library | per-URL | **One-click: Liked Songs + saved albums + all playlists** |
+| Organization | template only | **Pick a folder + auto-organize Artist › Album › Track** |
 
 The upstream `spotdl/` package is vendored **unmodified** so the fork stays
 easy to rebase on new releases. Everything new lives in two packages alongside
@@ -84,6 +87,54 @@ These pieces are covered by `tests_spotiflac/` and need no network or ffmpeg.
 
 ---
 
+## Real lossless: the Tidal backend
+
+spotdl (and the default "Free" backend) source audio from YouTube/Bandcamp and
+transcode it — that's *not* true lossless. For genuine FLAC, Spotiflac can use
+**your own Tidal account** while keeping Spotify purely as the *discovery* layer:
+
+1. Read the Spotify playlist/album/library for tracks **and their ISRC codes**
+   (those Web API reads still work — it's recommendations/audio-features that
+   were deprecated).
+2. Match each track on Tidal **by ISRC first** (exact recording), with a
+   fuzzy title/artist + duration fallback — far more reliable than YouTube
+   matching. See `spotiflac/lossless/matcher.py`.
+3. Download true FLAC via [streamrip](https://github.com/nathom/streamrip):
+   search through its Tidal client (for ISRC), download via the stable `rip`
+   CLI. Tidal applies its own Artist/Album layout under your chosen folder.
+
+Install the backend and link your account:
+
+```bash
+pip install -e ".[lossless]"
+```
+
+In the app, pick **Source & quality → Tidal**, click **Connect Tidal**, and
+approve the link in your browser (this reuses streamrip's device-flow login —
+the same `link.tidal.com` code you'd get from `rip`). Status updates to
+"connected" automatically. The same flow works for Qobuz/Deezer in streamrip if
+you extend `get_provider()`.
+
+> A paid Tidal account is required — there is no legal, login-free source of
+> guaranteed lossless. Only download music you're entitled to.
+
+## Download your whole Spotify library
+
+The **My Library** tab grabs everything in your account in one click — Liked
+Songs, saved albums, and all your playlists — by expanding to spotdl's
+`saved` / `all-user-saved-albums` / `all-user-playlists` query tokens. This
+needs a one-time Spotify sign-in (OAuth, opens a browser) to read your private
+library. It's exactly the long-run case the stability engine is built for:
+processed in batches, checkpointed after each, and resumable if you quit.
+
+## Choosing where files go
+
+Both the Download and Library tabs let you pick a destination folder and an
+**organization scheme** — *Artist › Album › Track* (default), *Artist › Track*,
+*Album › Track*, or flat. For the spotdl backend this builds the output
+template (e.g. `{artist}/{album}/{track-number} - {title}.{output-ext}`); for
+Tidal, streamrip organizes by artist/album under the folder you chose.
+
 ## Develop
 
 Requires Python 3.10–3.14, Node 18+, and ffmpeg available at runtime.
@@ -133,10 +184,13 @@ optional and documented in [`build/NOTARIZE.md`](build/NOTARIZE.md).
 |---|---|---|
 | `GET` | `/api/health` | liveness + version |
 | `POST` | `/api/credentials` | set Spotify credentials (optional; sensible defaults) |
-| `POST` | `/api/jobs` | start a download job |
+| `POST` | `/api/jobs` | start a download job (`backend`: `spotdl` or `tidal`) |
+| `POST` | `/api/jobs/library` | one-click: download the whole Spotify library |
 | `GET` | `/api/jobs` / `/api/jobs/{uid}` | list / inspect jobs |
 | `POST` | `/api/jobs/{uid}/{pause,resume,cancel}` | control a job |
 | `GET` | `/api/profile?user=…` | resolve a profile + list its public playlists |
+| `GET` `POST` | `/api/tidal/status` · `/api/tidal/login` | check / start Tidal account linking |
+| `GET` | `/api/spotify/status` | whether Spotify user-auth is active |
 | `WS` | `/ws` | live progress events |
 
 ---

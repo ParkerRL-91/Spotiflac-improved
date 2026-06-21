@@ -12,8 +12,12 @@ with the pieces that make long, unattended runs survivable:
 - :mod:`spotiflac.logging_setup` - per-job logs and a failed-tracks report.
 - :mod:`spotiflac.jobs` - the orchestrator that ties it all together and
   emits progress events the UI can render.
-- :mod:`spotiflac.profiles` - search Spotify profiles and list their public
+- :mod:`spotiflac.profiles` - look up Spotify profiles and list their public
   playlists.
+- :mod:`spotiflac.library` - expand a whole Spotify account (Liked Songs, saved
+  albums, playlists) into a single download job.
+- :mod:`spotiflac.lossless` - real-FLAC backends (Tidal via streamrip) that use
+  Spotify only for discovery and match tracks by ISRC.
 
 The upstream spotdl package is left untouched so the fork stays easy to
 rebase on new releases; everything here lives alongside it.

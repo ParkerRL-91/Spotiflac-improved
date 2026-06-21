@@ -103,6 +103,101 @@ function bindUi() {
   $("#profile-query").addEventListener("keydown", (e) => {
     if (e.key === "Enter") searchProfile();
   });
+
+  // Backend + Tidal connect
+  $("#backend").addEventListener("change", toggleTidalCard);
+  $("#tidal-connect").addEventListener("click", connectTidal);
+  toggleTidalCard();
+
+  // Library
+  $("#lib-choose-folder").addEventListener("click", async () => {
+    const folder = await window.spotiflac.chooseFolder();
+    if (folder) $("#lib-folder").value = folder;
+  });
+  $("#lib-start").addEventListener("click", startLibraryDownload);
+}
+
+// ---- Tidal connect --------------------------------------------------------
+function toggleTidalCard() {
+  const isTidal = $("#backend").value === "tidal";
+  $("#tidal-card").hidden = !isTidal;
+  if (isTidal) refreshTidalStatus();
+}
+
+async function refreshTidalStatus() {
+  try {
+    const s = await api("GET", "/api/tidal/status");
+    const dot = $("#tidal-dot");
+    const text = $("#tidal-text");
+    const hint = $("#tidal-hint");
+    if (s.linked) {
+      dot.className = "status-dot online";
+      text.textContent = "Tidal connected";
+      $("#tidal-connect").hidden = true;
+      hint.hidden = true;
+    } else if (s.state === "awaiting_user" && s.url) {
+      dot.className = "status-dot";
+      text.textContent = "Waiting for you to approve in browser…";
+      hint.hidden = false;
+      hint.innerHTML = `Open <a href="${s.url}" target="_blank" rel="noreferrer">${escapeHtml(s.url)}</a> and approve, then this updates automatically.`;
+      setTimeout(refreshTidalStatus, 3000);
+    } else {
+      dot.className = "status-dot offline";
+      text.textContent = "Tidal not connected";
+      $("#tidal-connect").hidden = false;
+    }
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
+async function connectTidal() {
+  try {
+    const s = await api("POST", "/api/tidal/login");
+    if (s.url) {
+      window.spotiflac.openPath(s.url); // open in default browser
+    }
+    toast("Approve the Tidal login in your browser.");
+    refreshTidalStatus();
+  } catch (err) {
+    toast(`Could not start Tidal login: ${err.message}`, true);
+  }
+}
+
+// ---- Library --------------------------------------------------------------
+async function startLibraryDownload() {
+  const folder = $("#lib-folder").value.trim();
+  const backend = $("#lib-backend").value;
+  if (backend === "tidal") {
+    const s = await api("GET", "/api/tidal/status").catch(() => ({}));
+    if (!s.linked) {
+      toast("Connect your Tidal account first (Download tab → Tidal).", true);
+      switchView("download");
+      $("#backend").value = "tidal";
+      toggleTidalCard();
+      return;
+    }
+  }
+  const payload = {
+    liked: $("#lib-liked").checked,
+    albums: $("#lib-albums").checked,
+    playlists: $("#lib-playlists").checked,
+    followed_artists: $("#lib-artists").checked,
+    backend,
+    format: backend === "tidal" ? "flac" : "mp3",
+    output: folder ? buildOutput("lib-folder", "lib-organize") : undefined,
+  };
+  const btn = $("#lib-start");
+  btn.disabled = true;
+  try {
+    await api("POST", "/api/jobs/library", payload);
+    toast("Library download started — opening a browser to sign in to Spotify if needed.");
+    switchView("activity");
+  } catch (err) {
+    toast(`Could not start: ${err.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function switchView(view) {
@@ -111,9 +206,24 @@ function switchView(view) {
 }
 
 // ---- download -------------------------------------------------------------
-function buildOutput() {
-  const folder = $("#folder").value.trim();
-  const template = "{artists} - {title}.{output-ext}";
+// Map an "organize" choice to a spotdl output template. (For the Tidal backend
+// streamrip applies its own artist/album layout under the chosen root folder.)
+function organizeTemplate(mode) {
+  switch (mode) {
+    case "artist-album-track":
+      return "{artist}/{album}/{track-number} - {title}.{output-ext}";
+    case "artist-track":
+      return "{artist}/{artist} - {title}.{output-ext}";
+    case "album-track":
+      return "{album}/{track-number} - {title}.{output-ext}";
+    default:
+      return "{artists} - {title}.{output-ext}";
+  }
+}
+
+function buildOutput(folderId = "folder", organizeId = "organize") {
+  const folder = $("#" + folderId).value.trim();
+  const template = organizeTemplate($("#" + organizeId).value);
   return folder ? `${folder}/${template}` : template;
 }
 
@@ -128,15 +238,17 @@ async function startDownload() {
     return;
   }
   const bitrate = $("#bitrate").value;
+  const backend = $("#backend").value;
   const payload = {
     query,
     output: buildOutput(),
-    format: $("#format").value,
+    format: backend === "tidal" ? "flac" : $("#format").value,
     bitrate: bitrate === "auto" ? "auto" : bitrate,
     threads: parseInt($("#threads").value, 10) || undefined,
     overwrite: $("#overwrite").value,
     batch_size: parseInt($("#batch").value, 10) || 50,
     max_track_attempts: parseInt($("#attempts").value, 10) || 4,
+    backend,
   };
   const btn = $("#start");
   btn.disabled = true;

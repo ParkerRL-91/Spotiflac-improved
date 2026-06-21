@@ -63,6 +63,10 @@ class JobConfig:
     max_track_attempts: int = 4
     backoff_base: float = 2.0
     backoff_max: float = 120.0
+    # "spotdl" = the built-in (Bandcamp/YouTube) engine; "tidal" = real FLAC
+    # from the user's Tidal account via streamrip, with Spotify-driven discovery.
+    backend: str = "spotdl"
+    user_auth: bool = False  # required for whole-library (liked/saved) discovery
 
 
 EventCallback = Callable[[Dict[str, Any]], None]
@@ -222,14 +226,18 @@ class DownloadJob:
             self._set_state(JobState.CANCELLED)
             return
 
-        # --- build a single downloader and reuse it across batches ----------
-        downloader = Downloader(settings=settings)
-        downloader.progress_handler = ProgressHandler(
-            simple_tui=True, web_ui=True, update_callback=self._progress_callback
-        )
-
         self._set_state(JobState.DOWNLOADING)
-        self._download_with_retries(downloader, pending)
+
+        if self.config.backend == "tidal":
+            # Real FLAC from the user's Tidal account (Spotify just discovers).
+            self._download_lossless(pending)
+        else:
+            # --- build a single downloader and reuse it across batches ------
+            downloader = Downloader(settings=settings)
+            downloader.progress_handler = ProgressHandler(
+                simple_tui=True, web_ui=True, update_callback=self._progress_callback
+            )
+            self._download_with_retries(downloader, pending)
 
         if self._cancel.is_set():
             self._set_state(JobState.CANCELLED)
@@ -311,6 +319,104 @@ class DownloadJob:
 
             remaining = failed_this_pass
 
+    def _lossless_out_dir(self) -> "Path":
+        """Derive a download folder from the output template (strip {tokens})."""
+        from pathlib import Path
+
+        template = self.config.settings.get("output", self.config.output)
+        # Everything before the first format token is the destination folder.
+        head = template.split("{", 1)[0]
+        directory = Path(head).parent if "{" in template else Path(head)
+        if str(directory) in ("", "."):
+            directory = Path.home() / "Spotiflac"
+        return directory
+
+    def _download_lossless(self, songs: List[Any]) -> None:
+        """Download ``songs`` as FLAC via a lossless provider (e.g. Tidal)."""
+        from spotiflac.lossless.discovery import song_to_target
+        from spotiflac.lossless.providers import (
+            ProviderNotConfigured,
+            get_provider,
+        )
+
+        provider = get_provider(self.config.backend, self.config.settings)
+        if not provider.is_configured():
+            raise ProviderNotConfigured(
+                f"{self.config.backend} account is not linked. Connect it first."
+            )
+
+        out_dir = self._lossless_out_dir()
+        # Transient errors worth retrying; a confident "no match" (LookupError)
+        # is deterministic and fails fast instead.
+        transient = (ConnectionError, TimeoutError, OSError, RuntimeError)
+
+        for batch in _chunks(songs, self.config.batch_size):
+            self._wait_if_paused()
+            if self._cancel.is_set():
+                return
+            for song in batch:
+                if self._cancel.is_set():
+                    return
+                target = song_to_target(song)
+                self._emit(
+                    "track",
+                    track={
+                        "url": song.url,
+                        "name": song.display_name,
+                        "progress": 10,
+                        "message": f"Searching {self.config.backend}",
+                        "path": None,
+                    },
+                )
+                try:
+                    path = retry_call(
+                        lambda t=target: provider.fetch(t, out_dir),
+                        max_attempts=self.config.max_track_attempts,
+                        base_delay=self.config.backoff_base,
+                        max_delay=self.config.backoff_max,
+                        rate_limiter=self._rate_limiter,
+                        retry_on=transient,
+                        description=song.display_name,
+                        should_cancel=self.should_cancel,
+                    )
+                    self.checkpoint.mark(
+                        song.url,
+                        TrackStatus.COMPLETED,
+                        name=song.display_name,
+                        path=str(path),
+                    )
+                    self._emit(
+                        "track",
+                        track={
+                            "url": song.url,
+                            "name": song.display_name,
+                            "progress": 100,
+                            "message": "Done",
+                            "path": str(path),
+                        },
+                    )
+                except ProviderNotConfigured:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - recorded per track
+                    self.checkpoint.mark(
+                        song.url,
+                        TrackStatus.FAILED,
+                        name=song.display_name,
+                        error=f"{exc.__class__.__name__}: {exc}",
+                    )
+                    self._emit(
+                        "track",
+                        track={
+                            "url": song.url,
+                            "name": song.display_name,
+                            "progress": 100,
+                            "message": "Error",
+                            "path": None,
+                        },
+                    )
+            self.checkpoint.save()
+            self._emit("progress")
+
     # ---------------------------------------------------------------- helpers
     def _progress_callback(self, tracker, message: str) -> None:
         """Bridge spotdl's SongTracker updates to UI events."""
@@ -360,6 +466,7 @@ class JobManager:
         self._lock = threading.Lock()
         self._rate_limiter = AdaptiveRateLimiter()
         self._spotify_ready = False
+        self._user_auth = False
 
     def ensure_spotify(
         self,
@@ -372,11 +479,26 @@ class JobManager:
         headless: bool = True,
         use_official_api: bool = False,
     ) -> None:
-        """Initialise the global Spotify client exactly once."""
+        """
+        Initialise the global Spotify client.
+
+        Normally a no-op after the first call. If a job needs user auth (to read
+        Liked Songs / private playlists) but the client was initialised without
+        it, we reset the singleton and re-init with user auth - which also forces
+        the official Web API, the only client that supports those reads.
+        """
         from spotdl.utils.spotify import SpotifyClient, SpotifyError
 
-        if self._spotify_ready:
+        if self._spotify_ready and (not user_auth or self._user_auth):
             return
+
+        if self._spotify_ready and user_auth and not self._user_auth:
+            # Reset the singleton so we can re-init with user auth.
+            SpotifyClient._instance = None  # type: ignore[attr-defined]
+
+        if user_auth:
+            use_official_api = True
+
         try:
             SpotifyClient.init(
                 client_id=client_id,
@@ -391,6 +513,11 @@ class JobManager:
             # Already initialised elsewhere - that's fine.
             pass
         self._spotify_ready = True
+        self._user_auth = user_auth or self._user_auth
+
+    @property
+    def user_auth_ready(self) -> bool:
+        return self._user_auth
 
     def create_job(
         self, config: JobConfig, on_event: Optional[EventCallback] = None
